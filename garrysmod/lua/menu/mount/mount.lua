@@ -1,104 +1,439 @@
 
-local pnlWorkshop = vgui.RegisterFile( "vgui/workshop.lua" )
-local vgui_workshop = nil
+include( "background.lua" )
+include( "cef_credits.lua" )
+include( "openurl.lua" )
+include( "ugcpublish.lua" )
 
-hook.Add( "WorkshopStart", "WorkshopStart", function()
+pnlMainMenu = nil
 
-	if ( IsValid( vgui_workshop ) ) then vgui_workshop:Remove() end
+local PANEL = {}
 
-	vgui_workshop = GetOverlayPanel():Add( pnlWorkshop )
+function PANEL:Init()
 
-end )
+	self:Dock( FILL )
+	self:SetKeyboardInputEnabled( true )
+	self:SetMouseInputEnabled( true )
 
-hook.Add( "WorkshopEnd", "WorkshopEnd", function()
+	self.HTML = vgui.Create( "DHTML", self )
 
-	if ( !IsValid( vgui_workshop ) ) then return end
+	JS_Language( self.HTML )
+	JS_Utility( self.HTML )
+	JS_Workshop( self.HTML )
 
-	vgui_workshop:Remove()
+	self.HTML:Dock( FILL )
+	self.HTML:OpenURL( "asset://garrysmod/html/menu.html" )
+	self.HTML:SetKeyboardInputEnabled( true )
+	self.HTML:SetMouseInputEnabled( true )
+	self.HTML:SetAllowLua( true )
+	self.HTML:RequestFocus()
 
-end )
+	ws_dupe.HTML = self.HTML
+	ws_save.HTML = self.HTML
+	addon.HTML = self.HTML
+	demo.HTML = self.HTML
 
-hook.Add( "WorkshopDownloadFile", "WorkshopDownloadFile", function( id, iImageID, title, iSize )
+	self:MakePopup()
+	self:SetPopupStayAtBack( true )
 
-	if ( !IsValid( vgui_workshop ) ) then
-		vgui_workshop = GetOverlayPanel():Add( pnlWorkshop )
+	-- If the console is already open, we've got in its way.
+	if ( gui.IsConsoleVisible() ) then
+		gui.ShowConsole()
 	end
 
-	vgui_workshop:PrepareDownloading( id, title, iSize )
-	vgui_workshop:StartDownloading( id, iImageID, title, iSize )
+end
 
-end )
+function PANEL:ScreenshotScan( folder )
 
-hook.Add( "WorkshopDownloadedFile", "WorkshopDownloadedFile", function( id, title, authorid )
+	local bReturn = false
 
-	if ( !IsValid( vgui_workshop ) ) then return end
+	local Screenshots = file.Find( folder .. "*.*", "GAME" )
+	for k, v in RandomPairs( Screenshots ) do
 
-	vgui_workshop:FinishedDownloading( id, title, authorid )
+		AddBackgroundImage( folder .. v )
+		bReturn = true
 
-end )
-
-hook.Add( "WorkshopDownloadProgress", "WorkshopDownloadProgress", function( id, iImageID, title, downloaded, expected )
-
-	if ( !IsValid( vgui_workshop ) ) then
-		vgui_workshop = GetOverlayPanel():Add( pnlWorkshop )
-		vgui_workshop:PrepareDownloading( id, title, expected )
-		vgui_workshop:StartDownloading( id, iImageID, title, expected )
 	end
 
-	vgui_workshop:UpdateProgress( downloaded, expected )
+	return bReturn
 
-end )
+end
 
-hook.Add( "WorkshopExtractProgress", "WorkshopExtractProgress", function( id, iImageID, title, percent )
+function PANEL:Paint()
 
-	if ( !IsValid( vgui_workshop ) ) then
-		vgui_workshop = GetOverlayPanel():Add( pnlWorkshop )
-		vgui_workshop:PrepareDownloading( id, title, percent )
-		vgui_workshop:StartDownloading( id, iImageID, title, percent )
+	DrawBackground()
+
+	if ( self.IsInGame != IsInGame() ) then
+
+		self.IsInGame = IsInGame()
+
+		if ( self.IsInGame ) then
+
+			if ( IsValid( self.InnerPanel ) ) then self.InnerPanel:Remove() end
+			self.HTML:QueueJavascript( "SetInGame( true )" )
+
+		else
+
+			self.HTML:QueueJavascript( "SetInGame( false )" )
+
+		end
 	end
 
-	vgui_workshop:ExtractProgress( title, percent )
 
-end )
 
-hook.Add( "WorkshopDownloadTotals", "WorkshopDownloadTotals", function( iRemain, iTotal )
+function PANEL:RefreshContent()
 
-	if ( !IsValid( vgui_workshop ) ) then
-		vgui_workshop = GetOverlayPanel():Add( pnlWorkshop )
-	end
+	self:RefreshGamemodes()
+	self:RefreshAddons()
+
+end
+
+function PANEL:RefreshGamemodes()
+
+	local json = util.TableToJSON( engine.GetGamemodes() )
+
+	self.HTML:QueueJavascript( "UpdateGamemodes( " .. json .. " )" )
+	self:UpdateBackgroundImages()
+	self.HTML:QueueJavascript( "UpdateCurrentGamemode( '" .. engine.ActiveGamemode():JavascriptSafe() .. "' )" )
+
+end
+
+function PANEL:RefreshAddons()
+
+	-- TODO
+
+end
+
+function PANEL:UpdateBackgroundImages()
+
+	ClearBackgroundImages()
 
 	--
-	-- Finished..
+	-- If there's screenshots in gamemodes/<gamemode>/backgrounds/*.jpg use them
 	--
-	if ( iRemain == iTotal ) then
-		return
+	if ( !self:ScreenshotScan( "gamemodes/" .. engine.ActiveGamemode() .. "/backgrounds/" ) ) then
+
+		--
+		-- If there's no gamemode specific here we'll use the default backgrounds
+		--
+		self:ScreenshotScan( "backgrounds/" )
+
 	end
 
-	local completed = ( iTotal - iRemain )
+	ChangeBackground( engine.ActiveGamemode() )
 
-	if ( IsValid( vgui_workshop ) ) then
-		vgui_workshop:UpdateTotalProgress( completed, iTotal )
+end
+
+function PANEL:Call( js )
+
+	self.HTML:QueueJavascript( js )
+
+end
+
+vgui.Register( "MainMenuPanel", PANEL, "EditablePanel" )
+
+--
+-- Called from JS when starting a new game
+--
+function UpdateMapList()
+
+	local MapList = GetMapList()
+	if ( !MapList ) then return end
+
+	local json = util.TableToJSON( MapList )
+	if ( !json ) then return end
+
+	pnlMainMenu:Call( "UpdateMaps(" .. json .. ")" )
+
+end
+
+--
+-- Called from JS when starting a new game
+--
+function UpdateServerSettings()
+
+	local array = {
+		hostname = GetConVarString( "hostname" ),
+		sv_lan = GetConVarString( "sv_lan" ),
+		p2p_enabled = GetConVarString( "p2p_enabled" )
+	}
+
+	local settings_file = file.Read( "gamemodes/" .. engine.ActiveGamemode() .. "/" .. engine.ActiveGamemode() .. ".txt", true )
+
+	if ( settings_file ) then
+
+		local Settings = util.KeyValuesToTable( settings_file )
+
+		if ( istable( Settings.settings ) ) then
+
+			array.settings = Settings.settings
+
+			for k, v in pairs( array.settings ) do
+				v.Value = GetConVarString( v.name )
+				v.Singleplayer = v.singleplayer && true || false
+			end
+
+		end
+
 	end
+
+	local json = util.TableToJSON( array )
+	pnlMainMenu:Call( "UpdateServerSettings(" .. json .. ")" )
+
+end
+
+--
+-- Get the player list for this server
+--
+function GetPlayerList( serverip )
+
+	serverlist.PlayerList( serverip, function( tbl )
+
+		local json = util.TableToJSON( tbl )
+		pnlMainMenu:Call( "SetPlayerList( '" .. serverip:JavascriptSafe() .. "', " .. json .. ")" )
+
+	end )
+
+end
+
+local BlackList = {
+	Addresses = {},
+	Hostnames = {},
+	Descripts = {},
+	Gamemodes = {},
+	Maps = {},
+}
+
+local NewsList = {}
+
+
+function LoadNewsList()
+	if ( !pnlMainMenu ) then return end
+
+	local json = util.TableToJSON( NewsList )
+	pnlMainMenu:Call( "UpdateNewsList(" .. json .. ", " .. cookie.GetString( "hide_newslist", "false" ) .. " )" )
+end
+
+function SaveHideNews( bHide )
+	cookie.Set( "hide_newslist", tostring( bHide ) )
+end
+
+local function IsServerBlacklisted( address, hostname, description, gm, map )
+	local addressNoPort = address:match( "[^:]*" )
+
+	for k, v in ipairs( BlackList.Addresses ) do
+		if ( address == v || addressNoPort == v ) then
+			return v
+		end
+
+		if ( v:EndsWith( "*" ) && address:sub( 1, v:len() - 1 ) == v:sub( 1, v:len() - 1 ) ) then return v end
+	end
+
+	for k, v in ipairs( BlackList.Hostnames ) do
+		if string.match( hostname, v ) then
+			return v
+		end
+	end
+
+	for k, v in ipairs( BlackList.Descripts ) do
+		if string.match( description, v ) then
+			return v
+		end
+	end
+
+	for k, v in ipairs( BlackList.Gamemodes ) do
+		if string.match( gm, v ) then
+			return v
+		end
+	end
+
+	for k, v in ipairs( BlackList.Maps ) do
+		if string.match( map, v ) then
+			return v
+		end
+	end
+
+	return nil
+end
+
+local Servers = {}
+local ShouldStop = {}
+
+function GetServers( category, id )
+
+	category = string.JavascriptSafe( category )
+	id = string.JavascriptSafe( id )
+
+	ShouldStop[ category ] = false
+	Servers[ category ] = {}
+
+	local data = {
+		Callback = function( ping, name, desc, map, players, maxplayers, botplayers, pass, lastplayed, address, gm, workshopid, isAnon, steamID64 )
+
+			if Servers[ category ] && Servers[ category ][ address ] then print( "Server Browser Error!", address, category ) return end
+			Servers[ category ][ address ] = true
+
+			local blackListMatch = IsServerBlacklisted( address, name, desc, gm, map )
+			if ( blackListMatch == nil ) then
+
+				name = string.JavascriptSafe( name )
+				desc = string.JavascriptSafe( desc )
+				map = string.JavascriptSafe( map )
+				address = string.JavascriptSafe( address )
+				gm = string.JavascriptSafe( gm )
+				workshopid = string.JavascriptSafe( workshopid )
+
+				pnlMainMenu:Call( string.format( 'AddServer( "%s", "%s", %i, "%s", "%s", "%s", %i, %i, %i, %s, %i, "%s", "%s", "%s", %s, "%s" );',
+					category, id, ping, name, desc, map, players, maxplayers, botplayers, tostring( pass ), lastplayed, address, gm, workshopid, tostring( isAnon ), steamID64 ) )
+
+			else
+
+				Msg( "Ignoring server '", name, "' @ ", address, " - ", blackListMatch, " is blacklisted\n" )
+
+			end
+
+			return !ShouldStop[ category ]
+
+		end,
+
+		Finished = function()
+			pnlMainMenu:Call( "FinishedServeres( '" .. category:JavascriptSafe() .. "' )" )
+			Servers[ category ] = {}
+		end,
+
+		Type = category,
+		GameDir = "garrysmod",
+		AppID = 4000,
+	}
+
+	serverlist.Query( data )
+
+end
+
+function DoStopServers( category )
+	pnlMainMenu:Call( "FinishedServeres( '" .. category:JavascriptSafe() .. "' )" )
+	ShouldStop[ category ] = true
+	Servers[ category ] = {}
+end
+
+--
+-- Called from JS
+--
+function UpdateLanguages()
+
+	local f = file.Find( "resource/localization/*.png", "MOD" )
+	local json = util.TableToJSON( f )
+	pnlMainMenu:Call( "UpdateLanguages(" .. json .. ")" )
+
+end
+
+--
+-- Called from the engine any time the language changes
+--
+function LanguageChanged( lang )
+
+	if ( !IsValid( pnlMainMenu ) ) then return end
+
+	UpdateLanguages()
+	pnlMainMenu:Call( "UpdateLanguage( \"" .. lang:JavascriptSafe() .. "\" )" )
+
+end
+
+function UpdateGames()
+
+	local games = engine.GetGames()
+	local json = util.TableToJSON( games )
+
+	pnlMainMenu:Call( "UpdateGames( " .. json .. ")" )
+
+end
+
+function UpdateSubscribedAddons()
+
+	local subscriptions = engine.GetAddons()
+	local json = util.TableToJSON( subscriptions )
+	pnlMainMenu:Call( "subscriptions.Update( " .. json .. " )" )
+
+	local UGCsubs = engine.GetUserContent()
+	local jsonUGC = util.TableToJSON( UGCsubs )
+	pnlMainMenu:Call( "subscriptions.UpdateUGC( " .. jsonUGC .. " )" )
+
+end
+
+function UpdateAddonDisabledState()
+	local noaddons, noworkshop = GetAddonStatus()
+	pnlMainMenu:Call( "UpdateAddonDisabledState( " .. tostring( noaddons ) .. ", " .. tostring( noworkshop ) .. " )" )
+end
+
+function MenuGetAddonData( wsid )
+	steamworks.FileInfo( wsid, function( data )
+		local json = util.TableToJSON( data ) or ""
+		pnlMainMenu:Call( "ReceivedChildAddonInfo( " .. json .. " )" )
+	end )
+end
+
+local presetCache = {}
+function CreateNewAddonPreset( data )
+	if ( table.IsEmpty( presetCache ) ) then presetCache = util.JSONToTable( LoadAddonPresets() or "" ) or {} end
+
+	local data = util.JSONToTable( data )
+	presetCache[ data.name ] = data
+
+	SaveAddonPresets( util.TableToJSON( presetCache ) )
+end
+function DeleteAddonPreset( name )
+	if ( table.IsEmpty( presetCache ) ) then presetCache = util.JSONToTable( LoadAddonPresets() or "" ) or {} end
+
+	presetCache[ name ] = {}
+	presetCache[ name ] = nil
+
+	SaveAddonPresets( util.TableToJSON( presetCache ) )
+
+	ListAddonPresets()
+end
+function ListAddonPresets()
+	if ( table.IsEmpty( presetCache ) ) then presetCache = util.JSONToTable( LoadAddonPresets() or "" ) or {} end
+
+	pnlMainMenu:Call( "OnReceivePresetList(" .. util.TableToJSON( presetCache ) .. ")" )
+end
+
+-- Called when UGC subscription status changes
+hook.Add( "WorkshopSubscriptionsChanged", "WorkshopSubscriptionsChanged", function( msg )
+
+	UpdateSubscribedAddons()
 
 end )
 
-hook.Add( "WorkshopSubscriptionsProgress", "WorkshopSubscriptionsProgress", function( iCurrent, iMax )
+hook.Add( "GameContentChanged", "RefreshMainMenu", function()
 
-	if ( !IsValid( vgui_workshop ) ) then
-		vgui_workshop = GetOverlayPanel():Add( pnlWorkshop )
-	end
+	if ( !IsValid( pnlMainMenu ) ) then return end
 
-	vgui_workshop:SubscriptionsProgress( iCurrent, iMax )
+	pnlMainMenu:RefreshContent()
 
-end )
+	UpdateGames()
+	UpdateServerSettings()
+	UpdateSubscribedAddons()
 
-hook.Add( "WorkshopSubscriptionsMessage", "WorkshopSubscriptionsMessage", function( msg )
-
-	if ( !IsValid( vgui_workshop ) ) then
-		vgui_workshop = GetOverlayPanel():Add( pnlWorkshop )
-	end
-
-	vgui_workshop:SetMessage( msg )
+	-- We update the maps with a delay because another hook updates the maps on content changed
+	-- so we really only want to update this after that.
+	timer.Simple( 0.5, function() UpdateMapList() end )
 
 end )
 
+hook.Add( "LoadGModSaveFailed", "LoadGModSaveFailed", function( str )
+	Derma_Message( str, "Failed to load save!", "OK" )
+end )
+
+--
+-- Initialize
+--
+timer.Simple( 0, function()
+
+	pnlMainMenu = vgui.Create( "MainMenuPanel" )
+	pnlMainMenu:Call( "UpdateVersion( '" .. VERSIONSTR:JavascriptSafe() .. "', '" .. BRANCH:JavascriptSafe() .. "' )" )
+
+	local language = GetConVarString( "gmod_language" )
+	LanguageChanged( language )
+
+	hook.Run( "GameContentChanged" )
+
+end )
